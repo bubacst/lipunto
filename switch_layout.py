@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import subprocess
+import sys
 
 # Словари для замены символов
 en_ru = {
@@ -89,77 +91,149 @@ def switch_text_layout(text):
 
 
 def select_last_word():
+    """Selects the last word using ydotool (Ctrl+Shift+Left)."""
+    # key codes: 29=Ctrl, 42=Shift, 105=Left
     subprocess.run(["ydotool", "key", "29:1", "42:1", "105:1", "105:0", "42:0", "29:0"])
 
 
 def paste_text():
+    """Pastes text using ydotool (Shift+Insert)."""
+    # key codes: 42=Shift, 110=Insert
     subprocess.run(["ydotool", "key", "42:1", "110:1", "110:0", "42:0"])
 
 
-def get_last_word():
-    select_last_word()
-    return (
-        subprocess.check_output(["wl-paste", "--primary", "--no-newline"])
-        .decode()
-        .strip()
-    )
-
-
-def get_clipboard_text():
-    return (
-        subprocess.check_output(["wl-paste", "--primary", "--no-newline"])
-        .decode()
-        .strip()
-    )
-
-
 def get_selection():
-    return (
-        subprocess.check_output(["wl-paste", "--primary", "--no-newline"])
-        .decode()
-        .strip()
+    """Gets the current primary selection using wl-paste."""
+    try:
+        return (
+            subprocess.check_output(["wl-paste", "--primary", "--no-newline"])
+            .decode()
+            .strip()
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Return empty string if wl-paste fails or nothing is selected
+        return ""
+
+
+def get_last_word():
+    """Selects the last word and returns it from the primary selection."""
+    select_last_word()
+    return get_selection()
+
+
+def switch_kde_layout():
+    """
+    Switches to the next keyboard layout in KDE Plasma using D-Bus.
+    Prints an error to stderr if it fails, but does not crash the script.
+    """
+    try:
+        # Get the current layout index (0-based)
+        layouts_list_str = (
+            subprocess.check_output(
+                [
+                    "qdbus",
+                    "org.kde.keyboard",
+                    "/Layouts",
+                    "getLayout",
+                ]
+            )
+            .decode()
+            .strip()
+        )
+        current_index = int(layouts_list_str)
+
+        # Calculate the next layout index
+        next_index = (current_index + 1) % 2
+
+        # Set the new layout
+        subprocess.run(
+            [
+                "qdbus",
+                "org.kde.keyboard",
+                "/Layouts",
+                "setLayout",
+                str(next_index),
+            ],
+            check=True,
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        # This error means the qdbus command itself was not found.
+        error_message = "Команда 'qdbus' не найдена. Убедитесь, что она установлена и доступна в вашем PATH (например, через пакет 'qttools5-dev-tools')."
+        return f"Warning: {error_message}"
+    except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError) as e:
+        # These errors mean qdbus ran but failed to communicate with the KDE service.
+        error_message = "Не удалось переключить раскладку через D-Bus. Убедитесь, что вы используете KDE Plasma и служба клавиатуры активна."
+        return f"Warning: {error_message}\nDetails: {e}"
+
+    return None
+
+
+def main():
+    """Main script logic."""
+    parser = argparse.ArgumentParser(description="Keyboard layout switcher")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "action",
+        nargs="?",
+        choices=("last", "selected"),
+        help="Action: 'last' for last word, 'selected' for current selection",
     )
 
+    args = parser.parse_args()
+    text = ""
+    if args.action == "last":
+        text = get_last_word()
+    elif args.action == "selected":
+        text = get_selection()
 
-parser = argparse.ArgumentParser(description="Keyboard layout switcher")
-group = parser.add_mutually_exclusive_group(required=True)
-group.add_argument(
-    "last",
-    nargs="?",
-    choices=("last", "selected"),
-    help="Switch last word",
-)
+    if text:
+        converted_text = switch_text_layout(text)
+        subprocess.run(["wl-copy", converted_text])
+        paste_text()
 
-text = ""
-args = parser.parse_args()
-if args.last:
-    text = get_last_word()
-elif args.selected:
-    text = get_selection()
+        # Switch layout using KDE D-Bus
 
-if text:
-    converted_text = switch_text_layout(text)
-    subprocess.run(["wl-copy", converted_text])
-    paste_text()
-    # subprocess.run(["xkb-switch", "-n"])
-    subprocess.run(
-        [
-            "kdialog",
-            "--title",
-            "EnRu",
-            "--passivepopup",
-            f"In: {text}\nOut:{converted_text}",
-            "5",
-        ]
-    )
-else:
-    subprocess.run(
-        [
-            "kdialog",
-            "--title",
-            "EnRu",
-            "--passivepopup",
-            "Ничего не выделено!",
-            "5",
-        ]
-    )
+        message_text = switch_kde_layout()
+        if not message_text:
+            message_text = f"In: {text}\nOut:{converted_text}"
+        subprocess.run(
+            [
+                "kdialog",
+                "--title",
+                "EnRu",
+                "--passivepopup",
+                f"In: {text}\nOut:{converted_text}",
+                "5",
+            ]
+        )
+    else:
+        subprocess.run(
+            [
+                "kdialog",
+                "--title",
+                "EnRu",
+                "--passivepopup",
+                "Ничего не выделено!",
+                "5",
+            ]
+        )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"An error occurred: {e}", file=sys.stderr)
+        # Try to show an error notification if kdialog is available
+        subprocess.run(
+            [
+                "kdialog",
+                "--title",
+                "EnRu Error",
+                "--passivepopup",
+                f"Произошла критическая ошибка:\n{e}",
+                "5",
+            ]
+        )
+        sys.exit(1)
