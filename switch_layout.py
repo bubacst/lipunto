@@ -203,7 +203,7 @@ def main():
                 "--title",
                 "EnRu",
                 "--passivepopup",
-                f"In: {text}\nOut:{converted_text}",
+                f"Было: {text}\nСтало:{converted_text}",
                 "5",
             ]
         )
