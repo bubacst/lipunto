@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 import argparse
-import json
 import subprocess
 import sys
+import time
+
+
+class Result:
+    error: int
+    text: str
+    clipboard: str
+
+    def __init__(self, error: int = 0, text: str = "", clipboard: str = ""):
+        self.error = error
+        self.text = text
+        self.clipboard = clipboard
+
 
 # Словари для замены символов
 en_ru = {
@@ -75,9 +87,10 @@ en_ru = {
 }
 
 ru_en = {v: k for k, v in en_ru.items()}
+commands = ["qdbus", "kdialog", "ydotool"]
 
 
-def switch_text_layout(text):
+def switch_text_layout(text: str) -> str:
     """Function to switch text layout between English and Russian and vice versa"""
     result = []
     for char in text:
@@ -90,83 +103,130 @@ def switch_text_layout(text):
     return "".join(result)
 
 
-def select_last_word():
-    """Selects the last word using ydotool (Ctrl+Shift+Left)."""
-    # key codes: 29=Ctrl, 42=Shift, 105=Left
-    subprocess.run(["ydotool", "key", "29:1", "42:1", "105:1", "105:0", "42:0", "29:0"])
-
-
-def paste_text():
-    """Pastes text using ydotool (Shift+Insert)."""
-    # key codes: 42=Shift, 110=Insert
-    subprocess.run(["ydotool", "key", "42:1", "110:1", "110:0", "42:0"])
-
-
-def get_selection():
-    """Gets the current primary selection using wl-paste."""
+def which():
+    """
+    Check qbus, kdialog, ydotool
+    """
     try:
-        return (
-            subprocess.check_output(["wl-paste", "--primary", "--no-newline"])
-            .decode()
-            .strip()
+        subprocess.check_output(["which"] + commands, stderr=sys.stdout)
+    except FileNotFoundError:
+        print(
+            "Команда 'which' не найдена. Убедитесь, что она установлена и доступна в вашем PATH."
         )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        # Return empty string if wl-paste fails or nothing is selected
-        return ""
+        exit(1)
+    except subprocess.CalledProcessError as e:
+        print(
+            f"Не удалось найти команду.Убедитесь что утилиты {commands} установлены\n{e.output.decode().strip()}"
+        )
+        exit(1)
 
 
-def get_last_word():
+def popup_message(text: str, error=False) -> None:
+    subprocess.run(
+        [
+            "kdialog",
+            "--title",
+            "EnRu",
+            "--error" if error else "--passivepopup",
+            text,
+            "5",
+        ]
+    )
+
+
+def run_command(commands: list) -> str:
+    """
+    Run command
+    """
+    result = ""
+    error_text = ""
+    try:
+        result = subprocess.check_output(commands, stderr=sys.stdout).decode().strip()
+    except FileNotFoundError:
+        # This error means the commands[0] command itself was not found.
+        error_text = f"Команда {commands[0]} не найдена. Убедитесь, что она установлена и доступна в вашем PATH (например, через пакет 'qttools5-dev-tools')."
+    except subprocess.CalledProcessError as e:
+        # These errors mean commands[0] ran but failed to execute.
+        error_text = (
+            f"Команда {commands[0]} завершилась с ошибкой:\n{e.output.decode().strip()}"
+        )
+
+    if error_text:
+        popup_message(error_text, True)
+        exit(1)
+
+    return result
+
+
+def run_ydotool_command(commands: list) -> None:
+    """
+    Run ydotool command
+    """
+    commands.insert(0, "ydotool")
+    run_command(commands)
+
+
+def run_qbus_command(commands: list) -> str:
+    """
+    Run qbus command
+    """
+    commands.insert(0, "qdbus")
+    return run_command(commands)
+
+
+def select_last_word() -> None:
+    """Selects the last word using ydotool (Ctrl+Shift+Left).
+    key codes: 29=Ctrl, 42=Shift, 105=Left
+    """
+    run_ydotool_command(["key", "29:1", "42:1", "105:1", "105:0", "42:0", "29:0"])
+
+
+def paste_text(text: str) -> None:
+    """Pastes text using ydotool (Shift+Insert)."""
+    # Set the new clipboard text
+    run_qbus_command(["org.kde.klipper", "/klipper", "setClipboardContents", text])
+    # Paste text key codes: 42=Shift, 110=Insert
+    run_ydotool_command(["key", "42:1", "110:1", "110:0", "42:0"])
+
+
+def get_selection() -> str:
+    """Get the last word using ydotool (Ctrl+C) and copy it to clipboard
+    key codes: 29=Ctrl, 46=C
+    """
+    run_ydotool_command(["key", "29:1", "46:1", "46:0", "29:0"])
+    return run_qbus_command(
+        [
+            "org.kde.klipper",
+            "/klipper",
+            "getClipboardContents",
+        ]
+    )
+
+
+def get_last_word() -> str:
     """Selects the last word and returns it from the primary selection."""
     select_last_word()
     return get_selection()
 
 
-def switch_kde_layout():
+def save_clipboard_last_item() -> str:
+    """
+    Save clipboard last item
+    """
+    return run_qbus_command(
+        [
+            "org.kde.klipper",
+            "/klipper",
+            "getClipboardContents",
+        ]
+    )
+
+
+def switch_kde_layout() -> None:
     """
     Switches to the next keyboard layout in KDE Plasma using D-Bus.
-    Prints an error to stderr if it fails, but does not crash the script.
     """
-    try:
-        # Get the current layout index (0-based)
-        layouts_list_str = (
-            subprocess.check_output(
-                [
-                    "qdbus",
-                    "org.kde.keyboard",
-                    "/Layouts",
-                    "getLayout",
-                ]
-            )
-            .decode()
-            .strip()
-        )
-        current_index = int(layouts_list_str)
-
-        # Calculate the next layout index
-        next_index = (current_index + 1) % 2
-
-        # Set the new layout
-        subprocess.run(
-            [
-                "qdbus",
-                "org.kde.keyboard",
-                "/Layouts",
-                "setLayout",
-                str(next_index),
-            ],
-            check=True,
-            capture_output=True,
-        )
-    except FileNotFoundError:
-        # This error means the qdbus command itself was not found.
-        error_message = "Команда 'qdbus' не найдена. Убедитесь, что она установлена и доступна в вашем PATH (например, через пакет 'qttools5-dev-tools')."
-        return f"Warning: {error_message}"
-    except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError) as e:
-        # These errors mean qdbus ran but failed to communicate with the KDE service.
-        error_message = "Не удалось переключить раскладку через D-Bus. Убедитесь, что вы используете KDE Plasma и служба клавиатуры активна."
-        return f"Warning: {error_message}\nDetails: {e}"
-
-    return None
+    run_qbus_command(["org.kde.keyboard", "/Layouts", "switchToNextLayout"])
 
 
 def main():
@@ -181,43 +241,23 @@ def main():
     )
 
     args = parser.parse_args()
-    text = ""
+    which()
+    # clipboard_last_item = run_qbus_command(["org.kde.klipper", "/klipper", "getClipboardContents"])
+    selection_text = ""
     if args.action == "last":
-        text = get_last_word()
+        time.sleep(0.2)
+        selection_text = get_last_word()
     elif args.action == "selected":
-        text = get_selection()
+        time.sleep(0.2)
+        selection_text = get_selection()
 
-    if text:
-        converted_text = switch_text_layout(text)
-        subprocess.run(["wl-copy", converted_text])
-        paste_text()
-
-        # Switch layout using KDE D-Bus
-
-        message_text = switch_kde_layout()
-        if not message_text:
-            message_text = f"In: {text}\nOut:{converted_text}"
-        subprocess.run(
-            [
-                "kdialog",
-                "--title",
-                "EnRu",
-                "--passivepopup",
-                f"Было: {text}\nСтало:{converted_text}",
-                "5",
-            ]
-        )
+    if selection_text:
+        converted_text = switch_text_layout(selection_text)
+        paste_text(converted_text)
+        switch_kde_layout()
+        popup_message(f"{selection_text}\n{converted_text}")
     else:
-        subprocess.run(
-            [
-                "kdialog",
-                "--title",
-                "EnRu",
-                "--passivepopup",
-                "Ничего не выделено!",
-                "5",
-            ]
-        )
+        popup_message("No text selected or last word found", error=True)
 
 
 if __name__ == "__main__":
@@ -225,15 +265,4 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"An error occurred: {e}", file=sys.stderr)
-        # Try to show an error notification if kdialog is available
-        subprocess.run(
-            [
-                "kdialog",
-                "--title",
-                "EnRu Error",
-                "--passivepopup",
-                f"Произошла критическая ошибка:\n{e}",
-                "5",
-            ]
-        )
         sys.exit(1)

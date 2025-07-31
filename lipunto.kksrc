@@ -1,0 +1,13 @@
+[Custom Commands][net.local.sw_last.sh.desktop]
+Exec=/usr/local/sbin/sw_last.sh
+Name=sw_last
+
+[Custom Commands][net.local.sw_selected.sh.desktop]
+Exec=/usr/local/sbin/sw_selected.sh
+Name=sw_selected
+
+[net.local.sw_last.sh.desktop][Global Shortcuts]
+_launch=Pause
+
+[net.local.sw_selected.sh.desktop][Global Shortcuts]
+_launch=Shift+Pause
