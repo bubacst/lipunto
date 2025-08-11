@@ -1,263 +1,264 @@
 #!/usr/bin/env python3
-import argparse
 import subprocess
 import sys
 import time
 
-
-class Result:
-    error: int
-    text: str
-    clipboard: str
-
-    def __init__(self, error: int = 0, text: str = "", clipboard: str = ""):
-        self.error = error
-        self.text = text
-        self.clipboard = clipboard
-
-
-# Словари для замены символов
-en_ru = {
-    "q": "й",
-    "w": "ц",
-    "e": "у",
-    "r": "к",
-    "t": "е",
-    "y": "н",
-    "u": "г",
-    "i": "ш",
-    "o": "щ",
-    "p": "з",
-    "[": "х",
-    "]": "ъ",
-    "a": "ф",
-    "s": "ы",
-    "d": "в",
-    "f": "а",
-    "g": "п",
-    "h": "р",
-    "j": "о",
-    "k": "л",
-    "l": "д",
-    ";": "ж",
-    "'": "э",
-    "z": "я",
-    "x": "ч",
-    "c": "с",
-    "v": "м",
-    "b": "и",
-    "n": "т",
-    "m": "ь",
-    ",": "б",
-    ".": "ю",
-    "/": ".",
-    "Q": "Й",
-    "W": "Ц",
-    "E": "У",
-    "R": "К",
-    "T": "Е",
-    "Y": "Н",
-    "U": "Г",
-    "I": "Ш",
-    "O": "Щ",
-    "P": "З",
-    "{": "Х",
-    "}": "Ъ",
-    "A": "Ф",
-    "S": "Ы",
-    "D": "В",
-    "F": "А",
-    "G": "П",
-    "H": "Р",
-    "J": "О",
-    "K": "Л",
-    "L": "Д",
-    ":": "Ж",
-    '"': "Э",
-    "Z": "Я",
-    "X": "Ч",
-    "C": "С",
-    "V": "М",
-    "B": "И",
-    "N": "Т",
-    "M": "Ь",
-    "<": "Б",
-    ">": "Ю",
-    "?": ",",
-}
-
-ru_en = {v: k for k, v in en_ru.items()}
-commands = ["qdbus", "kdialog", "ydotool"]
+from clipboard_utils import ClipboardManager
+from config_manager import (
+    DelaysConfig,
+    LipuntoSettings,
+    LoggingConfig,
+    UIConfig,
+    create_arg_parser,
+)
+from keyboard_layouts import get_layout_dict
+from logger import LogContext, init_logger
 
 
-def switch_text_layout(text: str) -> str:
-    """Function to switch text layout between English and Russian and vice versa"""
-    result = []
-    for char in text:
-        if char in en_ru:
-            result.append(en_ru[char])
-        elif char in ru_en:
-            result.append(ru_en[char])
-        else:
-            result.append(char)
-    return "".join(result)
+class LayoutSwitcher:
+    """Класс для переключения раскладки клавиатуры и преобразования текста"""
 
+    settings: LipuntoSettings
 
-def which():
-    """
-    Check qbus, kdialog, ydotool
-    """
-    try:
-        subprocess.check_output(["which"] + commands, stderr=sys.stdout)
-    except FileNotFoundError:
-        print(
-            "Команда 'which' не найдена. Убедитесь, что она установлена и доступна в вашем PATH."
-        )
-        exit(1)
-    except subprocess.CalledProcessError as e:
-        print(
-            f"Не удалось найти команду.Убедитесь что утилиты {commands} установлены\n{e.output.decode().strip()}"
-        )
-        exit(1)
+    def __init__(self, settings):
+        """
+        Инициализация LayoutSwitcher
 
+        Args:
+            settings: Экземпляр LipuntoSettings. Если None, используется глобальный.
+        """
+        # Инициализация конфигурации
+        self.settings = settings
+        # Инициализация логирования
+        logging_config = self.settings.get_logging_config()
+        self.logger = init_logger(logging_config.model_dump())
 
-def popup_message(text: str, error=False) -> None:
-    subprocess.run(
-        [
-            "kdialog",
-            "--title",
-            "EnRu",
-            "--error" if error else "--passivepopup",
-            text,
-            "5",
-        ]
-    )
+        # Получение настроек из Settings
+        self.show_popup = self.settings.ui.show_popup
+        self.layout = self.settings.get_layout()
 
+        self.clipboard_manager = ClipboardManager()
+        self.commands = ["qdbus", "kdialog", "ydotool"]
 
-def run_command(commands: list) -> str:
-    """
-    Run command
-    """
-    result = ""
-    error_text = ""
-    try:
-        result = subprocess.check_output(commands, stderr=sys.stdout).decode().strip()
-    except FileNotFoundError:
-        # This error means the commands[0] command itself was not found.
-        error_text = f"Команда {commands[0]} не найдена. Убедитесь, что она установлена и доступна в вашем PATH (например, через пакет 'qttools5-dev-tools')."
-    except subprocess.CalledProcessError as e:
-        # These errors mean commands[0] ran but failed to execute.
-        error_text = (
-            f"Команда {commands[0]} завершилась с ошибкой:\n{e.output.decode().strip()}"
+        self.logger.info(
+            f"LayoutSwitcher initialized with layout: {self.layout}, popup: {self.show_popup}"
         )
 
-    if error_text:
-        popup_message(error_text, True)
-        exit(1)
+    def switch_text_layout(self, text: str) -> str:
+        """Преобразование текста между раскладками клавиатуры
 
-    return result
+        Args:
+            text (str): Входной текст для преобразования
 
+        Returns:
+            str: Преобразованный текст
+        """
 
-def run_ydotool_command(commands: list) -> None:
-    """
-    Run ydotool command
-    """
-    commands.insert(0, "ydotool")
-    run_command(commands)
+        forward_dict, reverse_dict = get_layout_dict(self.settings.layout)
+        result = []
+        for char in text:
+            if char in forward_dict:
+                result.append(forward_dict[char])
+            elif char in reverse_dict:
+                result.append(reverse_dict[char])
+            else:
+                result.append(char)
+        return "".join(result)
 
+    def check_dependencies(self) -> None:
+        """Проверка наличия необходимых утилит"""
+        self.logger.info("Checking dependencies...")
+        try:
+            result = subprocess.check_output(
+                ["which"] + self.commands, stderr=sys.stdout
+            )
+            self.logger.debug(f"Dependencies check result: {result.decode().strip()}")
+        except FileNotFoundError:
+            error_msg = "Команда 'which' не найдена. Убедитесь, что она установлена и доступна в вашем PATH."
+            self.logger.error(error_msg)
+            print(error_msg, file=sys.stderr)
+            exit(1)
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Не удалось найти команду.Убедитесь что утилиты {self.commands} установлены\n{e.output.decode().strip()}"
+            self.logger.error(error_msg)
+            print(error_msg, file=sys.stderr)
+            exit(1)
+        self.logger.info("All dependencies are available")
 
-def run_qbus_command(commands: list) -> str:
-    """
-    Run qbus command
-    """
-    commands.insert(0, "qdbus")
-    return run_command(commands)
+    def show_popup_message(self, text: str, error: bool = False) -> None:
+        """Показ уведомления через kdialog
 
+        Args:
+            text (str): Текст сообщения
+            error (bool): Показывать как ошибку
+        """
+        if not self.show_popup:
+            self.logger.debug("Popup notifications are disabled")
+            return
 
-def select_last_word() -> None:
-    """Selects the last word using ydotool (Ctrl+Shift+Left).
-    key codes: 29=Ctrl, 42=Shift, 105=Left
-    """
-    run_ydotool_command(["key", "29:1", "42:1", "105:1", "105:0", "42:0", "29:0"])
+        self.logger.info(
+            f"Showing {'error' if error else 'info'} popup: {text[:50]}..."
+        )
+        try:
+            subprocess.run(
+                [
+                    "kdialog",
+                    "--title",
+                    "EnRu",
+                    "--error" if error else "--passivepopup",
+                    text,
+                    str(self.settings.ui.popup_timeout),
+                ],
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            self.logger.warning(f"Failed to show popup: {e}")
 
+    def run_ydotool_command(self, commands: list) -> None:
+        """Выполнение команды ydotool
 
-def paste_text(text: str) -> None:
-    """Pastes text using ydotool (Shift+Insert)."""
-    # Set the new clipboard text
-    run_qbus_command(["org.kde.klipper", "/klipper", "setClipboardContents", text])
-    # Paste text key codes: 42=Shift, 110=Insert
-    run_ydotool_command(["key", "42:1", "110:1", "110:0", "42:0"])
+        Args:
+            commands (list): Команда для выполнения
+        """
+        self.clipboard_manager.run_ydotool_command(commands)
 
+    def run_qbus_command(self, commands: list) -> str:
+        """Выполнение команды qbus
 
-def get_selection() -> str:
-    """Get the last word using ydotool (Ctrl+C) and copy it to clipboard
-    key codes: 29=Ctrl, 46=C
-    """
-    run_ydotool_command(["key", "29:1", "46:1", "46:0", "29:0"])
-    return run_qbus_command(
-        [
-            "org.kde.klipper",
-            "/klipper",
-            "getClipboardContents",
-        ]
-    )
+        Args:
+            commands (list): Команда для выполнения
 
+        Returns:
+            str: Результат выполнения команды
+        """
+        return self.clipboard_manager.run_qbus_command(commands)
 
-def get_last_word() -> str:
-    """Selects the last word and returns it from the primary selection."""
-    select_last_word()
-    return get_selection()
+    def select_last_word(self) -> None:
+        """Выделение последнего слова с помощью ydotool (Ctrl+Shift+Left)
+        Коды клавиш: 29=Ctrl, 42=Shift, 105=Left
+        """
+        self.logger.debug("Selecting last word with Ctrl+Shift+Left")
+        self.run_ydotool_command(
+            ["key", "29:1", "42:1", "105:1", "105:0", "42:0", "29:0"]
+        )
 
+    def get_last_word(self) -> str:
+        """Выделение последнего слова и возврат его из буфера обмена"""
+        self.logger.debug("Getting last word from clipboard")
+        self.select_last_word()
+        return self.clipboard_manager.get_selection()
 
-def save_clipboard_last_item() -> str:
-    """
-    Save clipboard last item
-    """
-    return run_qbus_command(
-        [
-            "org.kde.klipper",
-            "/klipper",
-            "getClipboardContents",
-        ]
-    )
+    def switch_kde_layout(self) -> None:
+        """Переключение на следующую раскладку клавиатуры в KDE Plasma через D-Bus"""
+        self.logger.debug("Switching KDE keyboard layout")
+        self.run_qbus_command(["org.kde.keyboard", "/Layouts", "switchToNextLayout"])
 
+    def process_last_word(self) -> str:
+        """Обработка последнего слова перед курсором
 
-def switch_kde_layout() -> None:
-    """
-    Switches to the next keyboard layout in KDE Plasma using D-Bus.
-    """
-    run_qbus_command(["org.kde.keyboard", "/Layouts", "switchToNextLayout"])
+        Returns:
+            str: Текст последнего слова или пустая строка
+        """
+        delay = self.settings.delays.text_process
+        self.logger.debug(f"Waiting {delay}s for text processing")
+        time.sleep(delay)
+        return self.get_last_word()
+
+    def process_selected_text(self) -> str:
+        """Обработка выделенного текста
+
+        Returns:
+            str: Выделенный текст или пустая строка
+        """
+        delay = self.settings.delays.text_process
+        self.logger.debug(f"Waiting {delay}s for text processing")
+        time.sleep(delay)
+        return self.clipboard_manager.get_selection()
+
+    def convert_and_replace(self, text: str) -> None:
+        """Преобразование текста и замена в приложении
+
+        Args:
+            text (str): Исходный текст для преобразования
+        """
+        self.logger.info(f"Converting text: '{text}'")
+        converted_text = self.switch_text_layout(text)
+        self.logger.info(f"Converted text: '{converted_text}'")
+
+        self.logger.debug("Pasting converted text")
+        self.clipboard_manager.paste_text(converted_text)
+
+        self.logger.debug("Switching keyboard layout")
+        self.switch_kde_layout()
+
+        if self.show_popup:
+            self.show_popup_message(f"{text}\n{converted_text}")
+
+    def run(self, action: str) -> None:
+        """Основной метод запуска переключения раскладки
+
+        Args:
+            action (str): Действие ('last' или 'selected')
+        """
+        with LogContext(f"Layout switch ({action})", self.logger):
+            self.check_dependencies()
+
+            selection_text = ""
+            if action == "last":
+                self.logger.info("Processing last word")
+                selection_text = self.process_last_word()
+            elif action == "selected":
+                self.logger.info("Processing selected text")
+                selection_text = self.process_selected_text()
+
+            if selection_text:
+                self.convert_and_replace(selection_text)
+            else:
+                self.logger.warning("No text selected or last word found")
+                if self.show_popup:
+                    self.show_popup_message(
+                        "No text selected or last word found", error=True
+                    )
 
 
 def main():
-    """Main script logic."""
-    parser = argparse.ArgumentParser(description="Keyboard layout switcher")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "action",
-        nargs="?",
-        choices=("last", "selected"),
-        help="Action: 'last' for last word, 'selected' for current selection",
+    """Основная логика скрипта."""
+    parser = create_arg_parser()
+    args = parser.parse_args()
+
+    # Инициализация конфигурации с аргументами командной строки
+    delays_config = DelaysConfig(
+        clipboard_set=args.delay_clipboard_set or 0.05,
+        clipboard_get=args.delay_clipboard_get or 0.05,
+        text_process=args.delay_text_process or 0.05,
+        paste=args.delay_paste or 0.1,
     )
 
-    args = parser.parse_args()
-    which()
-    # clipboard_last_item = run_qbus_command(["org.kde.klipper", "/klipper", "getClipboardContents"])
-    selection_text = ""
-    if args.action == "last":
-        time.sleep(0.2)
-        selection_text = get_last_word()
-    elif args.action == "selected":
-        time.sleep(0.2)
-        selection_text = get_selection()
+    # Определяем, включено ли логирование
+    logging_enabled = args.enable_logging
 
-    if selection_text:
-        converted_text = switch_text_layout(selection_text)
-        paste_text(converted_text)
-        switch_kde_layout()
-        popup_message(f"{selection_text}\n{converted_text}")
-    else:
-        popup_message("No text selected or last word found", error=True)
+    logging_config = LoggingConfig(
+        enabled=logging_enabled,
+        level=args.log_level if logging_enabled and args.log_level else "WARNING",
+        file=args.log_file or "/tmp/lipunto.log",
+        console=not args.no_console_log
+        if logging_enabled and args.no_console_log is not None
+        else False,
+        syslog=args.syslog or False,
+    )
+
+    ui_config = UIConfig(
+        show_popup=args.show_popup if args.show_popup else False,
+        popup_timeout=args.popup_timeout or 5,
+    )
+
+    settings = LipuntoSettings(
+        layout=args.layout, delays=delays_config, logging=logging_config, ui=ui_config
+    )
+
+    # Создаем LayoutSwitcher с передачей экземпляра Settings
+    switcher = LayoutSwitcher(settings)
+    switcher.run(args.action)
 
 
 if __name__ == "__main__":

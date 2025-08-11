@@ -1,10 +1,12 @@
 [Custom Commands][net.local.sw_last.sh.desktop]
 Exec=/usr/local/sbin/sw_last.sh
 Name=sw_last
+Comment=Switch layout for last word
 
 [Custom Commands][net.local.sw_selected.sh.desktop]
 Exec=/usr/local/sbin/sw_selected.sh
 Name=sw_selected
+Comment=Switch layout for selected text
 
 [net.local.sw_last.sh.desktop][Global Shortcuts]
 _launch=Pause

@@ -1,0 +1,10 @@
+{
+  "layout": "ru_en",
+  "ui": {
+    "show_popup": true,
+    "popup_timeout": 3
+  },
+  "delays": {
+    "text_process": 0.1
+  }
+}
